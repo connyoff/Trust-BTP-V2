@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: EscrowVault Tests",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/node_modules/.bin/hardhat",
+      "args": ["test", "test/EscrowVault.ts"],
+      "cwd": "${workspaceFolder}/backend",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "outFiles": ["${workspaceFolder}/backend/**/*.js"]
+    },
+    {
+      "name": "Debug: All Tests",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/node_modules/.bin/hardhat",
+      "args": ["test"],
+      "cwd": "${workspaceFolder}/backend",
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "outFiles": ["${workspaceFolder}/backend/**/*.js"]
+    }
+  ]
+}

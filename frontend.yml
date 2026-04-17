@@ -1,0 +1,56 @@
+name: Frontend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Node / npm versions
+        run: |
+          node --version
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Sensible → Secret GitHub (Settings > Secrets > Actions)
+          NEXT_PUBLIC_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_PROJECT_ID || 'ci-build-placeholder' }}
+          # Adresses contrats → Variables GitHub (Settings > Variables > Actions)
+          # Si la variable n'est pas définie, on utilise l'adresse nulle comme fallback :
+          # le build Next.js n'effectue aucun appel blockchain, elles ne servent qu'au runtime.
+          NEXT_PUBLIC_ESCROW_VAULT_ADDRESS: ${{ vars.NEXT_PUBLIC_ESCROW_VAULT_ADDRESS || '0x0000000000000000000000000000000000000000' }}
+          NEXT_PUBLIC_CHANTIER_NFT_ADDRESS: ${{ vars.NEXT_PUBLIC_CHANTIER_NFT_ADDRESS || '0x0000000000000000000000000000000000000000' }}
+          NEXT_PUBLIC_TRUST_SCORE_REGISTRY_ADDRESS: ${{ vars.NEXT_PUBLIC_TRUST_SCORE_REGISTRY_ADDRESS || '0x0000000000000000000000000000000000000000' }}
+          NEXT_PUBLIC_TOKEN_ADDRESS: ${{ vars.NEXT_PUBLIC_TOKEN_ADDRESS || '0x0000000000000000000000000000000000000000' }}
+          NEXT_PUBLIC_USDC_ADDRESS: ${{ vars.NEXT_PUBLIC_USDC_ADDRESS || '0x0000000000000000000000000000000000000000' }}
+          NEXT_PUBLIC_NETWORK: ${{ vars.NEXT_PUBLIC_NETWORK || 'hardhat' }}
+          NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL || 'https://sepolia-rollup.arbitrum.io/rpc' }}
+          NEXT_PUBLIC_DEPLOY_BLOCK: ${{ vars.NEXT_PUBLIC_DEPLOY_BLOCK || '1' }}
