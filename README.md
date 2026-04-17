@@ -1,228 +1,165 @@
-# Trust BTP — Backend Solidity
+# Trust BTP — Frontend
 
-Séquestre intelligent instaurant la confiance entre particuliers et artisans.
-Réseau cible : **Arbitrum Sepolia** (testnet soutenance) / Hardhat (local).
-
----
-
-## Architecture des contrats
-
-```
-contracts/
-├── EscrowVault.sol              Contrat principal — séquestre & paiements
-├── ChantierNFT.sol              NFT soulbound — contrat immuable du chantier
-├── TrustScoreRegistry.sol       Réputation on-chain des artisans (score 0–100)
-├── libraries/
-│   └── DataTypes.sol            Types partagés (enums, structs, constantes)
-├── interfaces/
-│   ├── IChantierNFT.sol
-│   ├── IYieldProvider.sol
-│   └── ITrustScoreRegistry.sol
-└── yield/
-    ├── AaveV3YieldProvider.sol  Adaptateur Aave V3 (yield optionnel)
-    └── interfaces/
-        └── IAavePool.sol
-```
-
-## Smart Contracts
-
-| Contrat | Rôle |
-|---|---|
-| `EscrowVault.sol` | Point d'entrée unique — séquestre USDC, jalons, litiges, frais 2% |
-| `ChantierNFT.sol` | ERC-721 Soulbound — dossier probatoire non-transférable par chantier |
-| `TrustScoreRegistry.sol` | Score de réputation artisan (0–100), 4 tiers, gel en litige |
-| `AaveV3YieldProvider.sol` | Yield opt-in — dépôt des fonds séquestrés dans Aave V3 |
+Interface web du protocole de séquestre décentralisé Trust BTP.
+Paiements par jalons, yield DeFi (Aave V3), réputation on-chain, NFT soulbound.
 
 ---
 
-## Flux principal
+## Stack technique
 
-```
-Artisan          submitDevis()       → Chantier créé (DevisSubmitted)
-Particulier      rejectDevis()       → Clôture définitive (DevisRejected)
-Particulier      acceptDevis()       → 110% déposés + NFT minté (Active)
-                                       ↓ pour chaque jalon (max 5) :
-Artisan          validateJalon()     → Preuve soumise, délai 48h démarre (Finished)
-Particulier      acceptJalon()       → Validation anticipée → fonds libérés (Accepted)
-N'importe qui    triggerAutoValidation() → Auto-validation après 48h sans réaction
-Particulier      acceptJalonWithMinorReserves() → Réserves mineures (AcceptedWithReserves)
-Particulier      acceptJalonWithMajorReserves() → Pause du chantier (Paused)
-Artisan          acknowledgeReserves(true)  → Accepte déductions, paiement partiel
-Artisan          acknowledgeReserves(false) → Refuse → Litige (InLitige)
-Particulier      lifterReserves()    → Lève les réserves, déblocage (ReservesLifted)
-Arbitre          resolveLitige()     → Tranche le litige (Active)
-Particulier      cancelChantier()    → Annulation avant 1er jalon (Cancelled)
-                                       ↓ à la fin du dernier jalon :
-                 _avancerOuTerminer() → Buffer retourné + Trust Score mis à jour (Completed)
-```
-
----
-
-## Règles de gestion
-
-### Dépôt & montants
-
-| Règle | Valeur |
-|---|---|
-| Dépôt exigé | 110% du montant du devis |
-| Nombre de jalons | 1 à 5 (défini à la soumission, immuable) |
-| Somme des jalons | Doit être exactement égale au devis (100%) |
-| Token accepté | USDC uniquement (6 décimales) |
-| Commission plateforme | 2% prélevés sur chaque jalon libéré |
-| Buffer (10% excédent) | Retourné au particulier à la clôture du chantier |
-
-### Validation des jalons
-
-| Règle | Détail |
-|---|---|
-| Principe | Le jalon est **validé automatiquement par défaut** |
-| Délai de réaction | Le particulier a **48h** pour lever des réserves après la preuve artisan |
-| Sans réaction → | Auto-validation déclenchable par n'importe qui (`triggerAutoValidation`) |
-| Validation anticipée | Le particulier peut accepter avant 48h (`acceptJalon`) |
-
-### Réserves mineures
-
-| Règle | Valeur |
-|---|---|
-| Part bloquée | 10% du montant du jalon |
-| Pénalité artisan (versée immédiatement à la plateforme) | 3% du montant du jalon |
-| Paiement artisan immédiat | Jalon − 10% bloqué − 3% pénalité = 87% |
-| Artisan accepte les réserves | Reçoit le paiement partiel, s'engage à corriger |
-| Artisan refuse | Ouvre un litige → arbitrage |
-| Particulier lève les réserves | Débloque les 10% vers l'artisan, avance au jalon suivant |
-
-### Réserves majeures
-
-| Règle | Détail |
-|---|---|
-| Effet | Le chantier est **suspendu** (Paused), aucun paiement |
-| Le jalon entier est bloqué | Jusqu'à résolution par l'arbitre ou reprise par le particulier |
-| Reprise | Particulier ou arbitre appelle `resumeChantier()`, le jalon repasse en Pending |
-
-### Litige
-
-| Règle | Détail |
-|---|---|
-| Ouverture | Artisan refuse les déductions de réserves mineures |
-| Score artisan | Gelé pendant le litige (`freezeScore`) |
-| Résolution | L'arbitre définit `blockedBps` (0–100%) + `penaltyBps` (0–50%) |
-| Artisan en tort | Particulier remboursé du jalon − bloqué − pénalité |
-| Particulier en tort | Artisan payé du jalon − bloqué − pénalité |
-| Bloqué + pénalité | Versés à la trésorerie plateforme |
-| Après résolution | Score mis à jour (impact négatif), chantier reprend |
-
-### Annulation (avant 1er jalon)
-
-| Règle | Détail |
-|---|---|
-| Conditions | Statut Active + 1er jalon non démarré (`Pending`) |
-| Qui peut annuler | Uniquement le particulier |
-| Artisan reçoit | Montant du **1er jalon** (compensation) |
-| Particulier récupère | `depositAmount − 1er jalon` |
-| Cas artisan | Non géré dans cette version |
-
-### Yield DeFi (optionnel)
-
-| Règle | Détail |
-|---|---|
-| Opt-in | Choisi par le particulier à l'acceptation du devis |
-| Provider | Aave V3 (adaptateur pluggable via `IYieldProvider`) |
-| Principe | 100% du dépôt (110% du devis) déposé dans Aave |
-| Paiements jalons | Retrait du principal uniquement — le yield reste dans le provider |
-| Collecte du yield | Owner appelle `collecterYield(token)` → trésorerie |
-| Ajout futur | Un 2ème provider peut être branché sans redéployer le vault |
-
-### NFT soulbound (ChantierNFT)
-
-| Règle | Détail |
-|---|---|
-| Mint | 1 NFT par chantier, au moment de l'acceptation du devis |
-| TokenId | Égal au `chantierId` |
-| Détenteur | Le vault lui-même (pas dans les wallets des parties) |
-| Affichage | Via la DApp uniquement (interrogation on-chain) |
-| Données immuables | Artisan, particulier, token, montants, descriptions des jalons |
-| Données mutables | **Statut de chaque jalon** (mis à jour automatiquement par le vault) |
-| Transfert | **Bloqué** (soulbound) |
-| Métadonnées | JSON base64 on-chain dans `tokenURI` |
-
-### Trust Score (TrustScoreRegistry)
-
-| Règle | Détail |
-|---|---|
-| Score initial | 50 / 100 |
-| Mise à jour | Automatique à chaque clôture de chantier (appelé par le vault) |
-| Jalons à temps (+) | +3 points par jalon livré dans les délais |
-| Livraison globale (+) | +5 points si chantier livré dans les délais |
-| Preuves soumises (+) | +2 points par preuve soumise |
-| Litige (−) | −15 points par litige |
-| Score gelé | Pendant un litige (pas de mise à jour possible) |
-
-**Tiers de réputation :**
-
-| Score | Tier | Avantages |
+| Technologie | Version | Rôle |
 |---|---|---|
-| 0–39 | Nouveau | Accès de base |
-| 40–64 | Confirmé | Badge, mise en avant |
-| 65–84 | Expert | Avance matériaux 30%, frais réduits |
-| 85–100 | Elite | Commission 1%, avance maximale, badge Élite |
+| **Next.js** | 16 (App Router) | Framework React SSR |
+| **TypeScript** | 5 | Typage statique |
+| **Tailwind CSS** | v4 | Styles utilitaires |
+| **shadcn/ui** | — | Composants UI (Button, Card, Input, Badge...) |
+| **wagmi** | v3 | Hooks React pour interactions blockchain |
+| **viem** | v2 | Client Ethereum bas niveau (lecture, ABI, utils, logs) |
+| **Reown AppKit** | v1 | Modal de connexion wallet (MetaMask, WalletConnect...) |
+| **TanStack React Query** | v5 | Cache et synchronisation des données on-chain |
+| **lucide-react** | — | Icônes |
 
 ---
 
-## Constantes clés
+## Arborescence
 
-```solidity
-DEPOSIT_RATIO_BPS       = 11_000   // 110% du devis
-PLATFORM_FEE_BPS        = 200      // 2% par jalon
-AUTO_VALIDATE_DELAY     = 48h
-MINOR_RESERVE_BLOCK_BPS = 1_000    // 10% bloqué
-MINOR_RESERVE_PENALTY_BPS = 300    // 3% pénalité
-MAX_JALONS              = 5
+```
+src/
+├── app/
+│   ├── globals.css              Thème dark teal + grille de fond
+│   ├── layout.tsx               Layout racine avec WalletProvider
+│   ├── page.tsx                 Landing (non connecté) ou Dashboard
+│   ├── nouveau-devis/
+│   │   └── page.tsx             Formulaire de soumission de devis (artisan)
+│   └── chantier/[id]/
+│       └── page.tsx             Détail chantier + toutes les actions
+├── components/
+│   ├── shared/
+│   │   ├── Header.tsx           Logo Trust BTP + bouton retour + ConnectButton
+│   │   ├── Footer.tsx           Réseau et token
+│   │   ├── Layout.tsx           Wrapper header/main/footer
+│   │   ├── ConnectButton.tsx    Bouton AppKit wallet
+│   │   └── NotConnected.tsx     Landing page (hero, étapes, deux publics)
+│   └── chantier/
+│       ├── StatusBadge.tsx      Badges colorés ChantierStatus / JalonStatus
+│       ├── TrustScoreBadge.tsx  Score et tier de réputation artisan
+│       ├── JalonRow.tsx         Ligne jalon avec icône, montant, actions inline
+│       ├── ChantierAccordionCard.tsx  Carte accordéon (barre de progression + jalons)
+│       ├── StatsBar.tsx         4 KPIs agrégés (actifs, escrow, jalons, litiges)
+│       ├── SubmitDevisForm.tsx  Formulaire 1–5 jalons avec calcul automatique 110%
+│       └── Dashboard.tsx        Stats + liste accordéon des chantiers
+├── hooks/                       Toute interaction blockchain passe par ici
+│   ├── useChantier.ts           Lecture struct Chantier + jalons
+│   ├── useChantiersByAddress.ts IDs des chantiers via getLogs(DevisSoumis)
+│   ├── useSubmitDevis.ts        Artisan — soumet un devis
+│   ├── useAcceptDevis.ts        Particulier — approve USDC puis acceptDevis (2 tx)
+│   ├── useJalonActions.ts       Toutes les actions jalons et cycle de vie
+│   └── useTrustScore.ts         Lecture TrustScoreRegistry.getStats()
+├── lib/
+│   ├── contracts.ts             ABIs et adresses (depuis .env.local)
+│   ├── utils.ts                 formatUsdc, shortAddress, parseUsdc, hashProof
+│   └── client.ts                publicClient viem (hardhat ou arbitrumSepolia)
+├── types/
+│   └── contracts.ts             Enums et interfaces TypeScript (Chantier, Jalon...)
+├── config/
+│   └── index.tsx                Config wagmi + Reown AppKit
+└── context/
+    └── index.tsx                WagmiProvider + QueryClientProvider
 ```
 
 ---
 
-## Commandes
+## Pour démarrer
 
-```shell
-# Installation
+**1. Installer les dépendances**
+```bash
 npm install
-
-# Compilation
-npx hardhat compile
-
-# Tests
-npx hardhat test test/EscrowVault.ts
-
-# Déploiement local (Hardhat)
-npx hardhat ignition deploy ignition/modules/TrustBTP.ts
-
-# Déploiement Arbitrum Sepolia
-npx hardhat keystore set ARBITRUM_SEPOLIA_PRIVATE_KEY
-npx hardhat keystore set ARBITRUM_SEPOLIA_RPC_URL
-npx hardhat ignition deploy ignition/modules/TrustBTP.ts --network arbitrumSepolia \
-  --parameters ignition/parameters.json
 ```
 
-### Exemple `ignition/parameters.json`
+**2. Configurer les variables d'environnement**
+```bash
+cp .env.local.example .env.local
+```
 
-```json
-{
-  "TrustBTP": {
-    "owner":        "0xYourOwnerAddress",
-    "treasury":     "0xYourTreasuryAddress",
-    "arbiter":      "0xYourArbiterAddress",
-    "aavePool":     "0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff",
-    "usdcAddress":  "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
-    "aUsdcAddress": "0x460b97BD498E1157530AEb3086301d5225b91216"
-  }
-}
+Remplir `.env.local` :
+```env
+# Reown AppKit — https://dashboard.reown.com
+NEXT_PUBLIC_PROJECT_ID=your_project_id
+
+# Réseau : "hardhat" (local) ou "arbitrumSepolia" (testnet)
+NEXT_PUBLIC_NETWORK=hardhat
+
+# Adresses des contrats (voir section ci-dessous)
+NEXT_PUBLIC_ESCROW_VAULT_ADDRESS=0x...
+NEXT_PUBLIC_CHANTIER_NFT_ADDRESS=0x...
+NEXT_PUBLIC_TRUST_SCORE_REGISTRY_ADDRESS=0x...
+```
+
+**3. Lancer le serveur de développement**
+```bash
+npm run dev          # http://localhost:3000
+npm run dev:poll     # WSL / Docker (polling filesystem)
+```
+
+**4. Build de production**
+```bash
+npm run build
+npm run lint
 ```
 
 ---
 
-## TODO
+## Après déploiement des contrats Hardhat
 
-- [ ] Paramétrage des pénalités (actuellement codées en dur)
-- [ ] Multi-token (EURC, DAI...)
-- [ ] 2ème provider de yield (Morpho)
-- [ ] Délais par jalon configurables (actuellement heuristique 7j/jalon)
+```bash
+# Dans le dossier backend/
+npx hardhat node                                                # lancer un nœud local
+npx hardhat ignition deploy ignition/modules/TrustBTP.ts       # déployer les contrats
+```
+
+Récupérer les adresses dans :
+```
+backend/ignition/deployments/chain-31337/deployed_addresses.json
+```
+
+Les copier dans `frontend/.env.local` :
+```env
+NEXT_PUBLIC_ESCROW_VAULT_ADDRESS=0x...     # TrustBTP#EscrowVault
+NEXT_PUBLIC_CHANTIER_NFT_ADDRESS=0x...     # TrustBTP#ChantierNFT
+NEXT_PUBLIC_TRUST_SCORE_REGISTRY_ADDRESS=0x...  # TrustBTP#TrustScoreRegistry
+```
+
+Pour Arbitrum Sepolia :
+```bash
+npx hardhat ignition deploy ignition/modules/TrustBTP.ts \
+  --network arbitrumSepolia --parameters ignition/parameters.json
+# Les adresses seront dans : deployments/chain-421614/deployed_addresses.json
+# Passer NEXT_PUBLIC_NETWORK=arbitrumSepolia dans .env.local
+```
+
+---
+
+## Règle d'architecture
+
+Toute interaction blockchain doit passer par les hooks dans `src/hooks/`.
+Ne jamais appeler `useReadContract` ou `useWriteContract` directement depuis un composant ou une page.
+
+```typescript
+// ✅ Correct
+const { chantier, jalons } = useChantier(chantierId)
+const { submitDevis, isPending } = useSubmitDevis()
+
+// ❌ À éviter dans les composants
+const { data } = useReadContract({ address: ..., abi: ..., functionName: 'chantiers' })
+```
+
+---
+
+## Documents de référence
+
+| Fichier | Rôle |
+|---|---|
+| `../doc/business-rules.md` | Règles métier complètes (statuts, flux, finances) |
+| `../doc/contract-abi.md` | Toutes les fonctions publiques des contrats |
+| `../doc/architecture.md` | Architecture globale frontend ↔ backend |
+| `../backend/README.md` | Guide backend (compilation, tests, déploiement) |
